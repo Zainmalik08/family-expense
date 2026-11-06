@@ -4,28 +4,40 @@
 var cfg = window.LEDGER_CONFIG || {};
 var app = document.getElementById('app');
 var CACHE_KEY = 'ledger-cache-v1';
-var DEFAULT_CATS = ['Doctor appointments', 'Hospital bill', 'Hospital & emergency', 'Medicines', 'Lab tests', 'Treatment', 'Supplies', 'Transport', 'Food & tea', 'Other'];
+var DEFAULT_CATS = ['Doctor appointments', 'Hospital bill', 'Hospital & emergency', 'Medicines', 'Lab tests', 'Treatment', 'Supplies', 'Transport', 'Other'];
+var TABS = ['overview', 'expenses', 'money'];
 
 var data = { title: "Mother's Treatment Expenses", updated: null, expenses: [], moneyIn: [], paybacks: [] };
 var loaded = false, offline = false, isAdmin = false, session = null, sb = null, lastLoad = 0;
 var filters = { q: '', cat: '', src: '' };
 var deferredInstall = null;
+var tab = TABS.indexOf(location.hash.slice(1)) >= 0 ? location.hash.slice(1) : 'overview';
 
 /* ---------- helpers ---------- */
 function h(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
 function money(n) { var v = Math.round(num(n)); return (v < 0 ? '−Rs ' : 'Rs ') + Math.abs(v).toLocaleString('en-US'); }
-function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function today() { return ymd(new Date()); }
+function daysAgo(n) { var d = new Date(); d.setDate(d.getDate() - n); return ymd(d); }
 function parseDay(s) { if (!s) return null; var d = new Date(s + 'T00:00:00'); return isNaN(d) ? null : d; }
 function fmtDay(s) { var d = parseDay(s); return d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''; }
-function fmtStamp(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }); }
-function monthLabel(k) { var p = k.split('-'); var d = new Date(+p[0], (+p[1] || 1) - 1, 1); return isNaN(d) ? 'No date' : d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }); }
+function dayLabel(s) {
+  if (!s) return 'Date not recorded';
+  if (s === today()) return 'Today';
+  if (s === daysAgo(1)) return 'Yesterday';
+  var d = parseDay(s); if (!d) return 'Date not recorded';
+  var o = { weekday: 'short', day: 'numeric', month: 'short' };
+  if (d.getFullYear() !== new Date().getFullYear()) o.year = 'numeric';
+  return d.toLocaleDateString('en-GB', o);
+}
+function fmtStamp(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); }
 function key(n) { return String(n || '').trim().toLowerCase(); }
 function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
 function checked(id) { var el = document.getElementById(id); return !!(el && el.checked); }
 function uniq(a) { var s = {}, o = []; a.forEach(function (x) { var k = key(x); if (k && !s[k]) { s[k] = 1; o.push(x); } }); return o; }
 function byDateDesc(field) { return function (a, b) { return String(b[field] || '').localeCompare(String(a[field] || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')); }; }
-function dateBlock(s) { var d = parseDay(s); return '<span class="e-date"><b>' + (d ? d.getDate() : '–') + '</b>' + (d ? h(d.toLocaleDateString('en-GB', { month: 'short' })) : '') + '</span>'; }
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
 var toastTimer = null;
 function toast(msg) {
@@ -37,10 +49,12 @@ function toast(msg) {
 /* ---------- totals ---------- */
 function compute() {
   var total = 0, cats = {}, map = {}, cashIn = 0, cashOut = 0, paidBackCash = 0, toReceive = 0, returned = 0;
+  var tKey = today(), wKey = daysAgo(6), todaySpent = 0, weekSpent = 0, first = '', undated = 0;
   function P(n) { var k = key(n); if (!map[k]) map[k] = { name: String(n).trim(), owed: 0, gave: 0, returned: 0, pending: 0 }; return map[k]; }
   data.expenses.forEach(function (e) {
     var a = num(e.amount); total += a;
     var c = e.category || 'Other'; cats[c] = (cats[c] || 0) + a;
+    if (!e.spent_on) undated++; else { if (e.spent_on === tKey) todaySpent += a; if (e.spent_on >= wKey) weekSpent += a; if (!first || e.spent_on < first) first = e.spent_on; }
     if (e.source === 'cash') cashOut += a;
     else if (e.source === 'person' && key(e.paid_by)) { var p = P(e.paid_by); if (e.pay_back) p.owed += a; else p.gave += a; }
   });
@@ -53,8 +67,11 @@ function compute() {
   data.paybacks.forEach(function (b) { var a = num(b.amount); P(b.to_name || 'Unknown').returned += a; returned += a; if (b.from_cash) paidBackCash += a; });
   var people = Object.keys(map).map(function (k) { var p = map[k]; p.left = p.owed - p.returned; return p; });
   people.sort(function (a, b) { return (b.left - a.left) || (b.pending - a.pending) || (b.gave - a.gave) || a.name.localeCompare(b.name); });
-  var due = people.reduce(function (s, p) { return s + Math.max(0, p.left); }, 0);
-  return { total: total, cats: cats, people: people, cashIn: cashIn, cashOut: cashOut, paidBackCash: paidBackCash, cash: cashIn - cashOut - paidBackCash, due: due, toReceive: toReceive, returned: returned };
+  var owing = people.filter(function (p) { return p.left > 0.5; });
+  var due = owing.reduce(function (s, p) { return s + p.left; }, 0);
+  var givers = people.filter(function (p) { return p.gave > 0; }).length;
+  return { total: total, cats: cats, people: people, owing: owing, cashIn: cashIn, cashOut: cashOut, paidBackCash: paidBackCash, cash: cashIn - cashOut - paidBackCash,
+    due: due, toReceive: toReceive, returned: returned, todaySpent: todaySpent, weekSpent: weekSpent, first: first, undated: undated, givers: givers };
 }
 function canonicalName(n) {
   n = String(n || '').trim(); if (!n) return '';
@@ -88,123 +105,166 @@ function load() {
     console.error(e);
     if (readCache()) { loaded = true; offline = true; render(); }
     else {
-      app.innerHTML = '<div class="top"><span class="eyebrow">Family expense ledger</span><h1>Could not load the figures</h1>'
-        + '<p class="sub">Check your internet connection and try again.</p></div><p><button type="button" class="primary" data-act="reload">Try again</button></p>';
+      app.innerHTML = '<header class="top"><div class="top-main"><h1>Could not load the figures</h1><p class="sub">Check your internet connection and try again.</p></div></header><p><button type="button" class="primary" data-act="reload">Try again</button></p>';
     }
   });
 }
 
-/* ---------- render ---------- */
-function render() {
-  if (!loaded) return;
-  var c = compute();
-  var html = '';
-  document.title = data.title;
-
-  html += '<header class="top"><div class="top-row"><span class="eyebrow">Family expense ledger</span><span class="role' + (isAdmin ? ' admin' : '') + '">' + (isAdmin ? 'Admin' : 'View only') + '</span></div>'
-    + '<h1>' + h(data.title) + '</h1>'
-    + '<p class="sub">' + (data.updated ? 'Last updated ' + h(fmtStamp(data.updated)) : 'Nothing recorded yet') + '</p></header>';
-  if (offline) html += '<p class="banner">You are offline. These are the last figures this phone saw.</p>';
-
-  html += '<section class="summary" aria-label="Summary"><div class="total"><span class="label">Total spent</span><span class="big">' + money(c.total) + '</span><span class="small">' + data.expenses.length + ' expense' + (data.expenses.length === 1 ? '' : 's') + ' recorded</span></div>'
-    + '<div class="stats"><div class="stat due"><span class="label">Still to pay back</span><span class="val">' + money(c.due) + '</span></div>'
-    + '<div class="stat hand"><span class="label">Cash in hand</span><span class="val">' + money(c.cash) + '</span></div>'
-    + '<div class="stat"><span class="label">Paid back so far</span><span class="val">' + money(c.returned) + '</span></div></div></section>';
-
-  // People
-  var rows = c.people.filter(function (p) { return p.owed > 0 || p.gave > 0 || p.pending > 0 || p.returned > 0; });
-  html += '<section aria-labelledby="h-owed"><div class="block-head"><h2 id="h-owed">Who we need to pay back</h2><button type="button" class="ghost" data-act="copy">Copy summary</button></div>';
-  if (rows.length) {
-    html += '<p class="block-note">Everyone who has paid or given money, and what we still owe them.</p><ul class="people">' + rows.map(function (p) {
-      var chips = '';
-      if (p.owed > 0) chips += p.left > 0.5 ? '<span class="chip due">Owe them ' + money(p.left) + '</span>' : '<span class="chip ok">Settled</span>';
-      if (p.pending > 0) chips += '<span class="chip due">To give ' + money(p.pending) + '</span>';
-      if (!chips) chips = '<span class="chip">Contributed</span>';
-      var lines = '';
-      if (p.owed > 0) lines += '<div><span>Paid for us, to be returned</span><span>' + money(p.owed) + '</span></div><div><span>Returned so far</span><span>' + money(p.returned) + '</span></div>';
-      if (p.gave > 0) lines += '<div><span>Gave or paid, no return needed</span><span>' + money(p.gave) + '</span></div>';
-      if (p.pending > 0) lines += '<div><span>Still to give to the budget</span><span>' + money(p.pending) + '</span></div>';
-      var out = '<li class="person"><div class="p-head"><span class="p-name">' + h(p.name) + '</span><span class="chips">' + chips + '</span></div>';
-      if (p.owed > 0) { var pct = Math.min(100, p.returned / p.owed * 100); out += '<div class="meter" role="img" aria-label="' + Math.round(pct) + '% paid back"><span style="width:' + pct.toFixed(1) + '%"></span></div>'; }
-      out += '<div class="p-lines">' + lines + '</div>';
-      if (isAdmin && p.left > 0.5) out += '<button type="button" class="link-btn" data-act="payback" data-name="' + h(p.name) + '">Record payback</button>';
-      return out + '</li>';
-    }).join('') + '</ul>';
-  } else {
-    html += '<p class="empty">Nobody needs to be paid back yet. When someone pays from their own pocket, they appear here with what we owe them.</p>';
-  }
-  html += '</section>';
-
-  // Cash
-  html += '<section aria-labelledby="h-cash"><div class="block-head"><h2 id="h-cash">Cash in hand</h2></div><div class="cash">'
-    + '<div class="cash-row"><span>Money received</span><span>' + money(c.cashIn) + '</span></div>'
-    + '<div class="cash-row"><span>Spent from cash</span><span>' + money(-c.cashOut) + '</span></div>'
-    + (c.paidBackCash ? '<div class="cash-row"><span>Paid back from cash</span><span>' + money(-c.paidBackCash) + '</span></div>' : '')
-    + '<div class="cash-row total"><span>Cash in hand now</span><span>' + money(c.cash) + '</span></div>'
-    + (c.toReceive ? '<div class="cash-row"><span>Still to receive</span><span>' + money(c.toReceive) + '</span></div>' : '')
-    + '</div></section>';
-
-  // Categories
+/* ---------- pieces ---------- */
+function sourceText(e) {
+  if (e.source === 'cash') return 'Cash in hand';
+  if (e.source === 'family') return 'Family money';
+  if (e.paid_by) return 'Paid by ' + h(e.paid_by) + (e.pay_back ? '<span class="tag">pay back</span>' : '');
+  return 'Someone’s own money';
+}
+function expenseRow(e, meta) {
+  var tag = isAdmin ? 'button' : 'div';
+  return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-expense" data-id="' + h(e.id) + '">'
+    + '<span class="r-main"><span class="r-title">' + h(e.description) + '</span><span class="r-meta">' + meta + '</span></span>'
+    + '<span class="r-amt">' + money(e.amount) + '</span></' + tag + '></li>';
+}
+function tile(cls, label, value, hint, goTo) {
+  return '<button type="button" class="tile ' + cls + '" data-act="tab" data-tab="' + goTo + '"><span class="label">' + label + '</span><span class="val">' + value + '</span><span class="hint">' + hint + '</span></button>';
+}
+function categoryList(c, limit) {
   var cats = Object.keys(c.cats).map(function (k) { return [k, c.cats[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
-  html += '<section aria-labelledby="h-cats"><div class="block-head"><h2 id="h-cats">Where the money went</h2></div>';
-  if (cats.length) {
-    var max = cats[0][1] || 1;
-    html += '<ul class="cats">' + cats.map(function (x) {
-      var share = c.total > 0 ? Math.round(x[1] / c.total * 100) : 0;
-      return '<li><button type="button" class="cat" data-act="filter-cat" data-cat="' + h(x[0]) + '" aria-label="Show ' + h(x[0]) + ' expenses"><span class="cat-top"><span>' + h(x[0]) + '</span><span class="num">' + money(x[1]) + '<em>' + share + '%</em></span></span><span class="bar"><span style="width:' + (x[1] / max * 100).toFixed(1) + '%"></span></span></button></li>';
-    }).join('') + '</ul>';
-  } else {
-    html += '<p class="empty">Spending by category (medicines, tests, hospital bills) appears here once expenses are added.</p>';
-  }
+  if (!cats.length) return '<p class="empty">Spending by category appears here once expenses are added.</p>';
+  var max = cats[0][1] || 1;
+  return '<ul class="cats card">' + cats.slice(0, limit || cats.length).map(function (x) {
+    var share = c.total > 0 ? Math.round(x[1] / c.total * 100) : 0;
+    return '<li><button type="button" class="cat" data-act="filter-cat" data-cat="' + h(x[0]) + '" aria-label="Show ' + h(x[0]) + ' expenses"><span class="cat-top"><span>' + h(x[0]) + '</span><span class="num">' + money(x[1]) + '<em>' + share + '%</em></span></span><span class="bar"><span style="width:' + Math.max(1, x[1] / max * 100).toFixed(1) + '%"></span></span></button></li>';
+  }).join('') + '</ul>';
+}
+function personCard(p, full) {
+  var out = '<div class="owe"><span class="owe-name">' + h(p.name) + '</span>';
+  if (p.left > 0.5) out += '<span class="owe-amt">' + money(p.left) + '</span>';
+  else if (p.owed > 0) out += '<span class="owe-amt ok">Settled</span>';
+  else if (p.pending > 0) out += '<span class="owe-amt">To give ' + money(p.pending) + '</span>';
+  else out += '<span class="owe-amt ok">' + money(p.gave) + '</span>';
+  var bits = [];
+  if (p.owed > 0) bits.push('Paid for us ' + money(p.owed) + ' · returned ' + money(p.returned));
+  if (full && p.gave > 0) bits.push('Gave ' + money(p.gave) + ', no return needed');
+  if (full && p.pending > 0 && !(p.left <= 0.5 && p.owed <= 0)) bits.push('Still to give ' + money(p.pending));
+  if (bits.length) out += '<span class="owe-detail">' + bits.join('<br>') + '</span>';
+  if (p.owed > 0) { var pct = Math.min(100, p.returned / p.owed * 100); out += '<span class="meter" role="img" aria-label="' + Math.round(pct) + '% paid back"><span style="width:' + pct.toFixed(1) + '%"></span></span>'; }
+  if (isAdmin && p.left > 0.5) out += '<button type="button" class="link-btn" data-act="payback" data-name="' + h(p.name) + '">Record payback</button>';
+  return out + '</div>';
+}
+
+/* ---------- views ---------- */
+function header() {
+  return '<header class="top"><div class="top-main"><h1>' + h(data.title) + '</h1><p class="sub">' + (data.updated ? 'Updated ' + h(fmtStamp(data.updated)) : 'Nothing recorded yet') + '</p></div>'
+    + '<div class="top-side">' + (isAdmin ? '<span class="badge">Admin</span>' : '') + '<button type="button" class="ghost" data-act="copy">Share</button></div></header>'
+    + (offline ? '<p class="banner">You are offline. These are the last figures this phone saw.</p>' : '');
+}
+
+function overview(c) {
+  var n = data.expenses.length;
+  var html = '<section class="hero" aria-label="Total spent"><span class="hero-label">Total spent so far</span><span class="hero-num">' + money(c.total) + '</span>'
+    + '<span class="hero-meta">' + plural(n, 'expense', 'expenses') + (c.first && !c.undated ? ' · since ' + h(fmtDay(c.first)) : '') + '</span>'
+    + '<div class="hero-row"><div><span>Today</span><b>' + money(c.todaySpent) + '</b></div><div><span>Last 7 days</span><b>' + money(c.weekSpent) + '</b></div></div></section>';
+
+  html += '<section class="tiles" aria-label="Quick figures">'
+    + tile('cash', 'Cash in hand', money(c.cash), 'Money left to spend', 'money')
+    + tile('due', 'We still owe', money(c.due), c.owing.length ? 'To ' + plural(c.owing.length, 'person', 'people') : 'Nobody right now', 'money')
+    + tile('', 'Money received', money(c.cashIn), c.toReceive ? money(c.toReceive) + ' still to come' : 'Cash given for treatment', 'money')
+    + tile('', 'Paid back', money(c.returned), 'Returned to people', 'money')
+    + '</section>';
+
+  html += '<section class="sec" aria-labelledby="h-owe"><div class="sec-head"><h2 id="h-owe">Who we need to pay back</h2></div>';
+  if (c.owing.length) html += '<div class="card">' + c.owing.map(function (p) { return personCard(p, false); }).join('') + '</div>';
+  else html += '<p class="empty">Nobody needs to be paid back right now.</p>';
+  var settled = c.people.filter(function (p) { return p.owed > 0 && p.left <= 0.5; }).map(function (p) { return h(p.name); });
+  var pend = c.people.filter(function (p) { return p.pending > 0; }).map(function (p) { return h(p.name) + ' ' + money(p.pending); });
+  if (settled.length) html += '<p class="note">Fully paid back: ' + settled.join(', ') + '</p>';
+  if (pend.length) html += '<p class="note">Still to give to the budget: ' + pend.join(', ') + '</p>';
   html += '</section>';
 
-  // Expenses
-  html += '<section id="entries" aria-labelledby="h-all"><div class="block-head"><h2 id="h-all">All expenses</h2></div>';
+  var catCount = Object.keys(c.cats).length;
+  html += '<section class="sec" aria-labelledby="h-cats"><div class="sec-head"><h2 id="h-cats">Where the money went</h2></div>' + categoryList(c, 5)
+    + (catCount > 5 ? '<button type="button" class="more" data-act="tab" data-tab="expenses">See all ' + catCount + ' categories →</button>' : '') + '</section>';
+
+  var recent = data.expenses.slice().sort(byDateDesc('spent_on')).slice(0, 6);
+  html += '<section class="sec" aria-labelledby="h-recent"><div class="sec-head"><h2 id="h-recent">Latest spending</h2></div>';
+  if (recent.length) {
+    html += '<ul class="rows card">' + recent.map(function (e) { return expenseRow(e, h(dayLabel(e.spent_on)) + ' · ' + h(e.category || 'Other')); }).join('') + '</ul>';
+    if (n > recent.length) html += '<button type="button" class="more" data-act="tab" data-tab="expenses">See all ' + n + ' expenses →</button>';
+  } else html += '<p class="empty">No expenses yet.' + (isAdmin ? ' Tap <b>+ Add</b> to record the first one.' : '') + '</p>';
+  html += '</section>';
+  return html;
+}
+
+function expensesView(c) {
+  var html = '<section class="sec" aria-labelledby="h-all"><div class="sec-head"><h2 id="h-all">All expenses</h2><span class="label">' + plural(data.expenses.length, 'expense', 'expenses') + ' · ' + money(c.total) + '</span></div>';
   if (data.expenses.length) {
-    var catOpts = uniq(cats.map(function (x) { return x[0]; }));
-    html += '<div class="filters"><input id="f-q" type="search" placeholder="Search what it was for" aria-label="Search expenses" value="' + h(filters.q) + '">'
+    var catOpts = uniq(Object.keys(c.cats).sort(function (a, b) { return c.cats[b] - c.cats[a]; }));
+    html += '<div class="filters"><input id="f-q" type="search" placeholder="Search expenses" aria-label="Search expenses" value="' + h(filters.q) + '">'
       + '<select id="f-cat" aria-label="Filter by category"><option value="">All categories</option>' + catOpts.map(function (x) { return '<option value="' + h(x) + '"' + (x === filters.cat ? ' selected' : '') + '>' + h(x) + '</option>'; }).join('') + '</select>'
       + '<select id="f-src" aria-label="Filter by how it was paid"><option value="">Paid any way</option>'
       + [['cash', 'Cash in hand'], ['person', 'Someone’s own money'], ['family', 'Family money']].map(function (o) { return '<option value="' + o[0] + '"' + (filters.src === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
       + '</select></div>';
   }
   html += '<div id="entry-list"></div></section>';
+  html += '<section class="sec" aria-labelledby="h-cats2"><div class="sec-head"><h2 id="h-cats2">By category</h2></div>' + categoryList(c) + '</section>';
+  return html;
+}
 
-  // Money in
+function moneyView(c) {
+  var html = '<section class="sec" aria-labelledby="h-cash"><div class="sec-head"><h2 id="h-cash">Cash in hand</h2></div><div class="card lines">'
+    + '<div class="line"><span>Money received</span><span>' + money(c.cashIn) + '</span></div>'
+    + '<div class="line"><span>Spent from cash</span><span>' + money(-c.cashOut) + '</span></div>'
+    + (c.paidBackCash ? '<div class="line"><span>Paid back from cash</span><span>' + money(-c.paidBackCash) + '</span></div>' : '')
+    + '<div class="line total"><span>Cash in hand now</span><span>' + money(c.cash) + '</span></div>'
+    + (c.toReceive ? '<div class="line"><span>Still to receive</span><span>' + money(c.toReceive) + '</span></div>' : '')
+    + '</div></section>';
+
+  var everyone = c.people.filter(function (p) { return p.owed > 0 || p.gave > 0 || p.pending > 0 || p.returned > 0; });
+  html += '<section class="sec" aria-labelledby="h-people"><div class="sec-head"><h2 id="h-people">Everyone who helped</h2></div>';
+  html += everyone.length ? '<div class="card">' + everyone.map(function (p) { return personCard(p, true); }).join('') + '</div>' : '<p class="empty">Nobody has paid or given money yet.</p>';
+  html += '</section>';
+
+  html += '<section class="sec" aria-labelledby="h-in"><div class="sec-head"><h2 id="h-in">Money received</h2><span class="label">' + money(c.cashIn) + '</span></div>';
   if (data.moneyIn.length) {
-    html += '<section aria-labelledby="h-in"><div class="block-head"><h2 id="h-in">Money received</h2></div><ul class="entry-list">' + data.moneyIn.slice().sort(byDateDesc('received_on')).map(function (m) {
+    html += '<ul class="rows card">' + data.moneyIn.slice().sort(byDateDesc('received_on')).map(function (m) {
       var tag = isAdmin ? 'button' : 'div';
       var tags = (m.received ? '' : '<span class="tag">still to receive</span>') + (m.returnable ? '<span class="tag">to return</span>' : '');
-      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="entry" data-act="edit-in" data-id="' + h(m.id) + '">' + dateBlock(m.received_on)
-        + '<span class="e-main"><span class="e-desc">From ' + h(m.from_name) + tags + '</span><span class="e-meta">' + h(m.note || fmtDay(m.received_on) || '') + '</span></span>'
-        + '<span class="e-amt in">+' + money(m.amount) + '</span></' + tag + '></li>';
-    }).join('') + '</ul></section>';
-  }
+      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-in" data-id="' + h(m.id) + '"><span class="r-main"><span class="r-title">From ' + h(m.from_name) + tags + '</span>'
+        + '<span class="r-meta">' + h(dayLabel(m.received_on)) + (m.note ? ' · ' + h(m.note) : '') + '</span></span><span class="r-amt in">+' + money(m.amount) + '</span></' + tag + '></li>';
+    }).join('') + '</ul>';
+  } else html += '<p class="empty">No money received yet.</p>';
+  html += '</section>';
 
-  // Paybacks
+  html += '<section class="sec" aria-labelledby="h-rep"><div class="sec-head"><h2 id="h-rep">Money paid back</h2><span class="label">' + money(c.returned) + '</span></div>';
   if (data.paybacks.length) {
-    html += '<section aria-labelledby="h-rep"><div class="block-head"><h2 id="h-rep">Money paid back</h2></div><ul class="entry-list">' + data.paybacks.slice().sort(byDateDesc('paid_on')).map(function (b) {
+    html += '<ul class="rows card">' + data.paybacks.slice().sort(byDateDesc('paid_on')).map(function (b) {
       var tag = isAdmin ? 'button' : 'div';
-      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="entry" data-act="edit-payback" data-id="' + h(b.id) + '">' + dateBlock(b.paid_on)
-        + '<span class="e-main"><span class="e-desc">Returned to ' + h(b.to_name) + '</span><span class="e-meta">' + h(b.note || (b.from_cash ? 'From cash in hand' : 'From other money')) + '</span></span>'
-        + '<span class="e-amt">' + money(b.amount) + '</span></' + tag + '></li>';
-    }).join('') + '</ul></section>';
-  }
+      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-payback" data-id="' + h(b.id) + '"><span class="r-main"><span class="r-title">Returned to ' + h(b.to_name) + '</span>'
+        + '<span class="r-meta">' + h(dayLabel(b.paid_on)) + (b.note ? ' · ' + h(b.note) : '') + '</span></span><span class="r-amt">' + money(b.amount) + '</span></' + tag + '></li>';
+    }).join('') + '</ul>';
+  } else html += '<p class="empty">Nothing paid back yet.</p>';
+  html += '</section>';
+  return html;
+}
 
-  // Footer
-  html += '<footer class="foot"><p>To keep this on your phone, open the link in Chrome or Safari and choose <b>Add to Home Screen</b>. It always shows the latest figures.</p>'
+function footer() {
+  return '<footer class="foot"><p>To keep this on your phone, open the link in Chrome or Safari and choose <b>Add to Home Screen</b>.</p>'
     + '<div class="foot-actions">' + (deferredInstall ? '<button type="button" class="link-btn" data-act="install">Install app</button>' : '')
     + '<button type="button" class="link-btn" data-act="reload">Refresh</button>'
     + (isAdmin ? '<button type="button" class="link-btn" data-act="settings">Rename</button><button type="button" class="link-btn" data-act="logout">Sign out</button>'
                : (session ? '<button type="button" class="link-btn" data-act="logout">Sign out</button>' : '<button type="button" class="link-btn" data-act="login">Admin sign in</button>'))
     + '</div></footer>';
+}
 
-  // keep search focus across re-renders
+function render() {
+  if (!loaded) return;
+  var c = compute();
+  document.title = data.title;
+  var html = header() + (tab === 'expenses' ? expensesView(c) : tab === 'money' ? moneyView(c) : overview(c)) + footer();
   var focused = document.activeElement && document.activeElement.id === 'f-q';
   app.innerHTML = html;
   if (focused) { var q = document.getElementById('f-q'); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
   renderEntries();
-  renderAdminBar();
+  renderChrome();
 }
 
 function matches(e) {
@@ -213,49 +273,55 @@ function matches(e) {
   if (filters.q) { var q = key(filters.q); if ((key(e.description) + ' ' + key(e.category) + ' ' + key(e.paid_by)).indexOf(q) < 0) return false; }
   return true;
 }
-function sourceText(e) {
-  if (e.source === 'cash') return 'Cash in hand';
-  if (e.source === 'family') return 'Family money';
-  if (e.paid_by) return 'Paid by ' + h(e.paid_by) + (e.pay_back ? '<span class="tag">pay back</span>' : '');
-  return 'Someone’s own money';
-}
 function renderEntries() {
   var box = document.getElementById('entry-list'); if (!box) return;
-  if (!data.expenses.length) {
-    box.innerHTML = '<p class="empty">No expenses recorded yet.' + (isAdmin ? ' Tap <b>Expense</b> below to add the first one.' : ' They will appear here as soon as they are added.') + '</p>';
-    return;
-  }
+  if (!data.expenses.length) { box.innerHTML = '<p class="empty">No expenses recorded yet.</p>'; return; }
   var list = data.expenses.filter(matches).sort(byDateDesc('spent_on'));
   var shownTotal = list.reduce(function (s, e) { return s + num(e.amount); }, 0);
   var out = '';
-  if (!list.length) out = '<p class="empty">No expenses match this search.</p>';
-  else {
-    var groups = [], idx = {};
-    list.forEach(function (e) {
-      var k = String(e.spent_on || '').slice(0, 7) || 'none';
-      if (!(k in idx)) { idx[k] = groups.length; groups.push({ k: k, items: [], sum: 0 }); }
-      var g = groups[idx[k]]; g.items.push(e); g.sum += num(e.amount);
-    });
-    groups.forEach(function (g) {
-      out += '<div class="month"><span>' + h(g.k === 'none' ? 'Date not recorded' : monthLabel(g.k)) + '</span><span class="num">' + money(g.sum) + '</span></div><ul class="entry-list">';
-      g.items.forEach(function (e) {
-        var tag = isAdmin ? 'button' : 'div';
-        out += '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="entry" data-act="edit-expense" data-id="' + h(e.id) + '">' + dateBlock(e.spent_on)
-          + '<span class="e-main"><span class="e-desc">' + h(e.description) + '</span><span class="e-meta">' + h(e.category || 'Other') + ' · ' + sourceText(e) + '</span></span>'
-          + '<span class="e-amt">' + money(e.amount) + '</span></' + tag + '></li>';
-      });
-      out += '</ul>';
-    });
-  }
   if (filters.q || filters.cat || filters.src) out += '<p class="result-line">Showing ' + list.length + ' of ' + data.expenses.length + ' · ' + money(shownTotal) + ' · <button type="button" class="link-btn" data-act="clear-filters">Clear filters</button></p>';
+  if (!list.length) { box.innerHTML = out + '<p class="empty">No expenses match this search.</p>'; return; }
+  var groups = [], idx = {};
+  list.forEach(function (e) {
+    var k = e.spent_on || 'none';
+    if (!(k in idx)) { idx[k] = groups.length; groups.push({ k: k, items: [], sum: 0 }); }
+    var g = groups[idx[k]]; g.items.push(e); g.sum += num(e.amount);
+  });
+  out += '<div class="card">' + groups.map(function (g) {
+    return '<div class="day"><span>' + h(dayLabel(g.k === 'none' ? '' : g.k)) + '</span><span class="num">' + money(g.sum) + '</span></div><ul class="rows">'
+      + g.items.map(function (e) { return expenseRow(e, h(e.category || 'Other') + ' · ' + sourceText(e)); }).join('') + '</ul>';
+  }).join('') + '</div>';
   box.innerHTML = out;
 }
 
-var bar = document.createElement('div'); bar.className = 'adminbar'; bar.hidden = true; document.body.appendChild(bar);
-function renderAdminBar() {
-  bar.hidden = !isAdmin;
-  if (!isAdmin) return;
-  bar.innerHTML = '<div class="adminbar-in"><button type="button" class="primary" data-act="add-expense">+ Expense</button><button type="button" class="secondary" data-act="add-in">+ Money in</button><button type="button" class="secondary" data-act="payback">Payback</button></div>';
+/* ---------- tab bar + add button ---------- */
+var ICONS = {
+  overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+  expenses: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg>',
+  money: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16" cy="14.5" r="1.2"/></svg>'
+};
+var nav = document.createElement('nav'); nav.className = 'tabbar'; nav.setAttribute('aria-label', 'Sections'); document.body.appendChild(nav);
+var fab = document.createElement('button'); fab.type = 'button'; fab.className = 'fab'; fab.setAttribute('data-act', 'add-menu'); fab.textContent = '+ Add'; fab.hidden = true; document.body.appendChild(fab);
+function renderChrome() {
+  nav.innerHTML = '<div class="tabbar-in">' + [['overview', 'Overview'], ['expenses', 'Expenses'], ['money', 'Money']].map(function (t) {
+    return '<button type="button" class="tab" data-act="tab" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : '') + '>' + ICONS[t[0]] + '<span>' + t[1] + '</span></button>';
+  }).join('') + '</div>';
+  fab.hidden = !isAdmin;
+}
+function setTab(t) {
+  if (TABS.indexOf(t) < 0) t = 'overview';
+  if (location.hash.slice(1) !== t) { location.hash = t; return; } // hashchange renders
+  tab = t; render(); window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', function () {
+  var t = location.hash.slice(1); tab = TABS.indexOf(t) >= 0 ? t : 'overview'; render(); window.scrollTo(0, 0);
+});
+function openAddMenu() {
+  openSheet('<div class="form"><h2 id="sheet-title">What do you want to add?</h2><div class="choices">'
+    + '<button type="button" class="choice" data-act="add-expense"><b>Expense</b><span>Money spent on treatment</span></button>'
+    + '<button type="button" class="choice" data-act="add-in"><b>Money received</b><span>Cash someone gave for the treatment</span></button>'
+    + '<button type="button" class="choice" data-act="payback"><b>Payback</b><span>Money returned to someone</span></button>'
+    + '</div><div class="actions"><span class="spacer"></span><button type="button" class="secondary" data-act="close">Cancel</button></div></div>');
 }
 
 /* ---------- sheet ---------- */
@@ -428,6 +494,7 @@ function copySummary() {
   } catch (e) { fallback(); }
 }
 
+
 /* ---------- events ---------- */
 function armDelete(btn, fn) {
   if (btn.getAttribute('data-armed')) { fn(); return; }
@@ -438,19 +505,17 @@ document.addEventListener('click', function (ev) {
   var t = ev.target.closest && ev.target.closest('[data-act]'); if (!t) return;
   var act = t.getAttribute('data-act'), id = t.getAttribute('data-id');
   if (act === 'close') return closeSheet();
+  if (act === 'tab') return setTab(t.getAttribute('data-tab'));
   if (act === 'reload') return load();
   if (act === 'copy') return copySummary();
   if (act === 'login') return openLogin();
   if (act === 'logout') { sb.auth.signOut().then(function () { toast('Signed out'); }); return; }
   if (act === 'install' && deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(function () { deferredInstall = null; render(); }); return; }
   if (act === 'clear-filters') { filters = { q: '', cat: '', src: '' }; render(); return; }
-  if (act === 'filter-cat') {
-    filters.cat = t.getAttribute('data-cat') || ''; var s = document.getElementById('f-cat'); if (s) s.value = filters.cat; renderEntries();
-    var sec = document.getElementById('entries'); if (sec) sec.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
-    return;
-  }
+  if (act === 'filter-cat') { filters = { q: '', cat: t.getAttribute('data-cat') || '', src: '' }; setTab('expenses'); if (tab === 'expenses') render(); return; }
   if (!isAdmin) return;
-  if (act === 'add-expense') openExpense(null);
+  if (act === 'add-menu') openAddMenu();
+  else if (act === 'add-expense') openExpense(null);
   else if (act === 'edit-expense') openExpense(id);
   else if (act === 'add-in') openMoneyIn(null);
   else if (act === 'edit-in') openMoneyIn(id);
@@ -506,7 +571,7 @@ window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault()
 /* ---------- start ---------- */
 var configured = /^https:\/\//.test(cfg.supabaseUrl || '') && cfg.supabaseKey && String(cfg.supabaseKey).indexOf('PASTE') < 0;
 if (!configured || !window.supabase) {
-  app.innerHTML = '<div class="top"><span class="eyebrow">Family expense ledger</span><h1>Almost ready</h1><p class="sub">The database connection is not set yet. Add the Supabase project URL and key in config.js.</p></div>';
+  app.innerHTML = '<header class="top"><div class="top-main"><h1>Almost ready</h1><p class="sub">The database connection is not set yet. Add the Supabase project URL and key in config.js.</p></div></header>';
   return;
 }
 sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -520,5 +585,4 @@ sb.auth.onAuthStateChange(function (event, s) {
     sb.rpc('is_admin').then(function (r) { isAdmin = !r.error && r.data === true; render(); }, function () { isAdmin = false; render(); });
   }, 0);
 });
-
 })();
