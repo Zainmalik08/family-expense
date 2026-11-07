@@ -171,3 +171,18 @@ fieldset{border:0;margin:0;padding:0;min-width:0;display:grid;gap:6px}
 
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + env(safe-area-inset-bottom,0px));z-index:60;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;max-width:calc(100% - 32px);box-shadow:0 6px 24px rgba(0,0,0,.2)}
 @media (prefers-reduced-motion:no-preference){.toast{animation:rise .2s ease-out}@keyframes rise{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}}
+
+/* day-by-day story */
+.timeline{display:grid;gap:14px}
+.daycard{display:grid}
+.dc-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 16px 10px}
+.dc-head h3{margin:0;font-size:16px;font-weight:600}
+.dc-spent{font-size:13px;font-weight:600;color:var(--due);font-variant-numeric:tabular-nums}
+.dc-line{display:flex;justify-content:space-between;gap:12px;padding:9px 16px;font-variant-numeric:tabular-nums}
+.dc-line.start{font-size:13px;color:var(--muted);background:var(--bg);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.dc-line.end{font-weight:700;background:var(--accent-soft);color:var(--accent);border-top:1px solid var(--line)}
+.r-amt.own{color:var(--muted)}
+.line .in{color:var(--ok)}
+.label.due{color:var(--due);font-weight:600}
+.cat{cursor:default}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}

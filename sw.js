@@ -1,6 +1,6 @@
 // Keeps the app shell available offline. Figures always come fresh from the
 // database when online; the app itself shows the last figures it saw when offline.
-var CACHE = 'ledger-shell-v1';
+var CACHE = 'ledger-shell-v3';
 var SHELL = ['./', './index.html', './styles.css', './app.js', './config.js', './vendor/supabase.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
@@ -19,9 +19,9 @@ self.addEventListener('fetch', function (e) {
   if (url.hostname.endsWith('supabase.co')) return; // never cache the database
   if (url.origin === location.origin) {
     // network first, so updates show up right away; cache as fallback
-    e.respondWith(fetch(req).then(function (res) {
+    e.respondWith(fetch(req, { cache: 'no-store' }).then(function (res) {
       var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req, copy); }); return res;
-    }).catch(function () { return caches.match(req).then(function (m) { return m || caches.match('./index.html'); }); }));
+    }).catch(function () { return caches.match(req, { ignoreSearch: true }).then(function (m) { return m || caches.match('./index.html'); }); }));
   } else if (url.hostname.indexOf('fonts.g') === 0) {
     e.respondWith(caches.match(req).then(function (m) {
       var net = fetch(req).then(function (res) { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(req, copy); }); return res; });

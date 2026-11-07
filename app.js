@@ -4,8 +4,8 @@
 var cfg = window.LEDGER_CONFIG || {};
 var app = document.getElementById('app');
 var CACHE_KEY = 'ledger-cache-v1';
-var DEFAULT_CATS = ['Doctor appointments', 'Hospital bill', 'Hospital & emergency', 'Medicines', 'Lab tests', 'Treatment', 'Supplies', 'Transport', 'Other'];
-var TABS = ['overview', 'expenses', 'money'];
+var DEFAULT_CATS = ['Hospital bill', 'Medicines', 'Doctor & treatment', 'Lab tests', 'Transport', 'Other'];
+var TABS = ['overview', 'days', 'money'];
 
 var data = { title: "Mother's Treatment Expenses", updated: null, expenses: [], moneyIn: [], paybacks: [] };
 var loaded = false, offline = false, isAdmin = false, session = null, sb = null, lastLoad = 0;
@@ -21,15 +21,20 @@ function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padSta
 function today() { return ymd(new Date()); }
 function daysAgo(n) { var d = new Date(); d.setDate(d.getDate() - n); return ymd(d); }
 function parseDay(s) { if (!s) return null; var d = new Date(s + 'T00:00:00'); return isNaN(d) ? null : d; }
-function fmtDay(s) { var d = parseDay(s); return d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''; }
+function fmtDay(s) { var d = parseDay(s); return d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''; }
 function dayLabel(s) {
   if (!s) return 'Date not recorded';
   if (s === today()) return 'Today';
   if (s === daysAgo(1)) return 'Yesterday';
   var d = parseDay(s); if (!d) return 'Date not recorded';
-  var o = { weekday: 'short', day: 'numeric', month: 'short' };
-  if (d.getFullYear() !== new Date().getFullYear()) o.year = 'numeric';
-  return d.toLocaleDateString('en-GB', o);
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+function longDay(s) {
+  var d = parseDay(s); if (!d) return 'Date not recorded';
+  var full = d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  if (s === today()) return 'Today · ' + full;
+  if (s === daysAgo(1)) return 'Yesterday · ' + full;
+  return full;
 }
 function fmtStamp(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); }
 function key(n) { return String(n || '').trim().toLowerCase(); }
@@ -48,15 +53,15 @@ function toast(msg) {
 
 /* ---------- totals ---------- */
 function compute() {
-  var total = 0, cats = {}, map = {}, cashIn = 0, cashOut = 0, paidBackCash = 0, toReceive = 0, returned = 0;
-  var tKey = today(), wKey = daysAgo(6), todaySpent = 0, weekSpent = 0, first = '', undated = 0;
+  var total = 0, cats = {}, map = {}, cashIn = 0, cashOut = 0, ownPocket = 0, paidBackCash = 0, toReceive = 0, returned = 0;
+  var tKey = today(), todaySpent = 0, first = '', last = '';
   function P(n) { var k = key(n); if (!map[k]) map[k] = { name: String(n).trim(), owed: 0, gave: 0, returned: 0, pending: 0 }; return map[k]; }
   data.expenses.forEach(function (e) {
     var a = num(e.amount); total += a;
     var c = e.category || 'Other'; cats[c] = (cats[c] || 0) + a;
-    if (!e.spent_on) undated++; else { if (e.spent_on === tKey) todaySpent += a; if (e.spent_on >= wKey) weekSpent += a; if (!first || e.spent_on < first) first = e.spent_on; }
+    if (e.spent_on) { if (e.spent_on === tKey) todaySpent += a; if (!first || e.spent_on < first) first = e.spent_on; if (!last || e.spent_on > last) last = e.spent_on; }
     if (e.source === 'cash') cashOut += a;
-    else if (e.source === 'person' && key(e.paid_by)) { var p = P(e.paid_by); if (e.pay_back) p.owed += a; else p.gave += a; }
+    else { ownPocket += a; if (e.source === 'person' && key(e.paid_by)) { var p = P(e.paid_by); if (e.pay_back) p.owed += a; else p.gave += a; } }
   });
   data.moneyIn.forEach(function (m) {
     var a = num(m.amount); var p = P(m.from_name || 'Unknown');
@@ -66,17 +71,38 @@ function compute() {
   });
   data.paybacks.forEach(function (b) { var a = num(b.amount); P(b.to_name || 'Unknown').returned += a; returned += a; if (b.from_cash) paidBackCash += a; });
   var people = Object.keys(map).map(function (k) { var p = map[k]; p.left = p.owed - p.returned; return p; });
-  people.sort(function (a, b) { return (b.left - a.left) || (b.pending - a.pending) || (b.gave - a.gave) || a.name.localeCompare(b.name); });
+  people.sort(function (a, b) { return (b.left - a.left) || (b.owed - a.owed) || (b.gave - a.gave) || a.name.localeCompare(b.name); });
   var owing = people.filter(function (p) { return p.left > 0.5; });
   var due = owing.reduce(function (s, p) { return s + p.left; }, 0);
-  var givers = people.filter(function (p) { return p.gave > 0; }).length;
-  return { total: total, cats: cats, people: people, owing: owing, cashIn: cashIn, cashOut: cashOut, paidBackCash: paidBackCash, cash: cashIn - cashOut - paidBackCash,
-    due: due, toReceive: toReceive, returned: returned, todaySpent: todaySpent, weekSpent: weekSpent, first: first, undated: undated, givers: givers };
+  return { total: total, cats: cats, people: people, owing: owing, cashIn: cashIn, cashOut: cashOut, ownPocket: ownPocket, paidBackCash: paidBackCash,
+    cash: cashIn - cashOut - paidBackCash, due: due, toReceive: toReceive, returned: returned, todaySpent: todaySpent, first: first, last: last };
 }
 function canonicalName(n) {
   n = String(n || '').trim(); if (!n) return '';
   var found = compute().people.filter(function (p) { return key(p.name) === key(n); })[0];
   return found ? found.name : n;
+}
+
+/* day-by-day story: money in first, then paybacks, then spending, in the order entered */
+function timeline() {
+  var ev = [];
+  data.moneyIn.forEach(function (m) { if (m.received) ev.push({ d: m.received_on || '', r: 0, t: m.created_at || '', kind: 'in', x: m }); });
+  data.paybacks.forEach(function (b) { ev.push({ d: b.paid_on || '', r: 1, t: b.created_at || '', kind: 'back', x: b }); });
+  data.expenses.forEach(function (e) { ev.push({ d: e.spent_on || '', r: 2, t: e.created_at || '', kind: 'out', x: e }); });
+  ev.sort(function (a, b) {
+    if (!a.d !== !b.d) return a.d ? -1 : 1;
+    return a.d.localeCompare(b.d) || (a.r - b.r) || String(a.t).localeCompare(String(b.t));
+  });
+  var days = [], cash = 0, cur = null;
+  ev.forEach(function (e) {
+    if (!cur || cur.k !== e.d) { cur = { k: e.d, start: cash, end: cash, items: [], spent: 0 }; days.push(cur); }
+    var a = num(e.x.amount), eff = 0;
+    if (e.kind === 'in') eff = a;
+    else if (e.kind === 'back') eff = e.x.from_cash ? -a : 0;
+    else { cur.spent += a; eff = e.x.source === 'cash' ? -a : 0; }
+    cash += eff; cur.end = cash; cur.items.push(e);
+  });
+  return days;
 }
 
 /* ---------- data ---------- */
@@ -111,42 +137,52 @@ function load() {
 }
 
 /* ---------- pieces ---------- */
-function sourceText(e) {
-  if (e.source === 'cash') return 'Cash in hand';
-  if (e.source === 'family') return 'Family money';
-  if (e.paid_by) return 'Paid by ' + h(e.paid_by) + (e.pay_back ? '<span class="tag">pay back</span>' : '');
-  return 'Someone’s own money';
-}
-function expenseRow(e, meta) {
+function rowWrap(act, id, inner) {
   var tag = isAdmin ? 'button' : 'div';
-  return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-expense" data-id="' + h(e.id) + '">'
-    + '<span class="r-main"><span class="r-title">' + h(e.description) + '</span><span class="r-meta">' + meta + '</span></span>'
-    + '<span class="r-amt">' + money(e.amount) + '</span></' + tag + '></li>';
+  return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="' + act + '" data-id="' + h(id) + '">' + inner + '</' + tag + '></li>';
 }
-function tile(cls, label, value, hint, goTo) {
-  return '<button type="button" class="tile ' + cls + '" data-act="tab" data-tab="' + goTo + '"><span class="label">' + label + '</span><span class="val">' + value + '</span><span class="hint">' + hint + '</span></button>';
+function storyRow(e) {
+  var x = e.x;
+  if (e.kind === 'in') {
+    return rowWrap('edit-in', x.id, '<span class="r-main"><span class="r-title">Received from ' + h(x.from_name) + '</span>' + (x.note ? '<span class="r-meta">' + h(x.note) + '</span>' : '') + '</span><span class="r-amt in">+' + money(x.amount) + '</span>');
+  }
+  if (e.kind === 'back') {
+    return rowWrap('edit-payback', x.id, '<span class="r-main"><span class="r-title">Paid back to ' + h(x.to_name) + '</span><span class="r-meta">' + h(x.note || (x.from_cash ? 'From the cash' : 'Not from the cash')) + '</span></span><span class="r-amt">−' + money(x.amount) + '</span>');
+  }
+  if (x.source === 'cash') {
+    return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span><span class="r-meta">' + h(x.category || 'Other') + '</span></span><span class="r-amt">−' + money(x.amount) + '</span>');
+  }
+  var who = x.paid_by ? h(x.paid_by) : 'family';
+  return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span><span class="r-meta">Paid by ' + who + ' from own pocket, not from the cash'
+    + (x.pay_back ? (settledNames[key(x.paid_by)] ? '<span class="tag ok">paid back ✓</span>' : '<span class="tag">to pay back</span>') : '') + '</span></span><span class="r-amt own">' + money(x.amount) + '</span>');
 }
-function categoryList(c, limit) {
+function dayCard(day) {
+  var out = '<article class="daycard card"><header class="dc-head"><h3>' + h(longDay(day.k)) + '</h3>' + (day.spent ? '<span class="dc-spent">Spent ' + money(day.spent) + '</span>' : '') + '</header>'
+    + '<div class="dc-line start"><span>Cash at start of day</span><span>' + money(day.start) + '</span></div>'
+    + '<ul class="rows">' + day.items.map(storyRow).join('') + '</ul>'
+    + '<div class="dc-line end"><span>Cash left at end of day</span><span>' + money(day.end) + '</span></div></article>';
+  return out;
+}
+function categoryList(c) {
   var cats = Object.keys(c.cats).map(function (k) { return [k, c.cats[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
   if (!cats.length) return '<p class="empty">Spending by category appears here once expenses are added.</p>';
   var max = cats[0][1] || 1;
-  return '<ul class="cats card">' + cats.slice(0, limit || cats.length).map(function (x) {
+  return '<ul class="cats card">' + cats.map(function (x) {
     var share = c.total > 0 ? Math.round(x[1] / c.total * 100) : 0;
-    return '<li><button type="button" class="cat" data-act="filter-cat" data-cat="' + h(x[0]) + '" aria-label="Show ' + h(x[0]) + ' expenses"><span class="cat-top"><span>' + h(x[0]) + '</span><span class="num">' + money(x[1]) + '<em>' + share + '%</em></span></span><span class="bar"><span style="width:' + Math.max(1, x[1] / max * 100).toFixed(1) + '%"></span></span></button></li>';
+    return '<li><div class="cat"><span class="cat-top"><span>' + h(x[0]) + '</span><span class="num">' + money(x[1]) + '<em>' + share + '%</em></span></span><span class="bar"><span style="width:' + Math.max(1, x[1] / max * 100).toFixed(1) + '%"></span></span></div></li>';
   }).join('') + '</ul>';
 }
 function personCard(p, full) {
   var out = '<div class="owe"><span class="owe-name">' + h(p.name) + '</span>';
-  if (p.left > 0.5) out += '<span class="owe-amt">' + money(p.left) + '</span>';
-  else if (p.owed > 0) out += '<span class="owe-amt ok">Settled</span>';
+  if (p.left > 0.5) out += '<span class="owe-amt">We owe ' + money(p.left) + '</span>';
+  else if (p.owed > 0) out += '<span class="owe-amt ok">Paid back ✓</span>';
   else if (p.pending > 0) out += '<span class="owe-amt">To give ' + money(p.pending) + '</span>';
   else out += '<span class="owe-amt ok">' + money(p.gave) + '</span>';
   var bits = [];
-  if (p.owed > 0) bits.push('Paid for us ' + money(p.owed) + ' · returned ' + money(p.returned));
-  if (full && p.gave > 0) bits.push('Gave ' + money(p.gave) + ', no return needed');
-  if (full && p.pending > 0 && !(p.left <= 0.5 && p.owed <= 0)) bits.push('Still to give ' + money(p.pending));
+  if (p.owed > 0) bits.push('Paid ' + money(p.owed) + ' from own pocket · returned ' + money(p.returned));
+  if (full && p.gave > 0) bits.push('Gave ' + money(p.gave) + ' treatment money');
+  if (full && p.pending > 0 && p.owed > 0) bits.push('Still to give ' + money(p.pending));
   if (bits.length) out += '<span class="owe-detail">' + bits.join('<br>') + '</span>';
-  if (p.owed > 0) { var pct = Math.min(100, p.returned / p.owed * 100); out += '<span class="meter" role="img" aria-label="' + Math.round(pct) + '% paid back"><span style="width:' + pct.toFixed(1) + '%"></span></span>'; }
   if (isAdmin && p.left > 0.5) out += '<button type="button" class="link-btn" data-act="payback" data-name="' + h(p.name) + '">Record payback</button>';
   return out + '</div>';
 }
@@ -159,77 +195,55 @@ function header() {
 }
 
 function overview(c) {
-  var n = data.expenses.length;
-  var html = '<section class="hero" aria-label="Total spent"><span class="hero-label">Total spent so far</span><span class="hero-num">' + money(c.total) + '</span>'
-    + '<span class="hero-meta">' + plural(n, 'expense', 'expenses') + (c.first && !c.undated ? ' · since ' + h(fmtDay(c.first)) : '') + '</span>'
-    + '<div class="hero-row"><div><span>Today</span><b>' + money(c.todaySpent) + '</b></div><div><span>Last 7 days</span><b>' + money(c.weekSpent) + '</b></div></div></section>';
+  var range = c.first ? fmtDay(c.first) + (c.last && c.last !== c.first ? ' – ' + fmtDay(c.last) : '') : '';
+  var html = '<section class="hero" aria-label="Total spent"><span class="hero-label">Total spent on treatment</span><span class="hero-num">' + money(c.total) + '</span>'
+    + '<span class="hero-meta">' + (range ? range + ' · ' : '') + plural(data.expenses.length, 'expense', 'expenses') + '</span>'
+    + '<div class="hero-row"><div><span>Cash left now</span><b>' + money(c.cash) + '</b></div><div><span>Spent today</span><b>' + money(c.todaySpent) + '</b></div></div></section>';
 
-  html += '<section class="tiles" aria-label="Quick figures">'
-    + tile('cash', 'Cash in hand', money(c.cash), 'Money left to spend', 'money')
-    + tile('due', 'We still owe', money(c.due), c.owing.length ? 'To ' + plural(c.owing.length, 'person', 'people') : 'Nobody right now', 'money')
-    + tile('', 'Money received', money(c.cashIn), c.toReceive ? money(c.toReceive) + ' still to come' : 'Cash given for treatment', 'money')
-    + tile('', 'Paid back', money(c.returned), 'Returned to people', 'money')
+  html += '<section class="sec" aria-labelledby="h-sum"><div class="sec-head"><h2 id="h-sum">Where the money came from and went</h2></div><div class="card lines">'
+    + '<div class="line"><span>Treatment money received</span><span class="in">+' + money(c.cashIn) + '</span></div>'
+    + '<div class="line"><span>Spent from this money</span><span>−' + money(c.cashOut) + '</span></div>'
+    + (c.paidBackCash ? '<div class="line"><span>Paid back to people from it</span><span>−' + money(c.paidBackCash) + '</span></div>' : '')
+    + '<div class="line total"><span>Cash left now</span><span>' + money(c.cash) + '</span></div></div>'
+    + (c.ownPocket ? '<p class="note">Another ' + money(c.ownPocket) + ' was paid by people from their own pocket. That is included in the total spent, and shown below.</p>' : '')
     + '</section>';
 
-  html += '<section class="sec" aria-labelledby="h-owe"><div class="sec-head"><h2 id="h-owe">Who we need to pay back</h2></div>';
-  if (c.owing.length) html += '<div class="card">' + c.owing.map(function (p) { return personCard(p, false); }).join('') + '</div>';
-  else html += '<p class="empty">Nobody needs to be paid back right now.</p>';
-  var settled = c.people.filter(function (p) { return p.owed > 0 && p.left <= 0.5; }).map(function (p) { return h(p.name); });
-  var pend = c.people.filter(function (p) { return p.pending > 0; }).map(function (p) { return h(p.name) + ' ' + money(p.pending); });
-  if (settled.length) html += '<p class="note">Fully paid back: ' + settled.join(', ') + '</p>';
-  if (pend.length) html += '<p class="note">Still to give to the budget: ' + pend.join(', ') + '</p>';
+  var ownPeople = c.people.filter(function (p) { return p.owed > 0; });
+  html += '<section class="sec" aria-labelledby="h-owe"><div class="sec-head"><h2 id="h-owe">Paid from own pocket</h2>' + (c.due ? '<span class="label due">Still to pay back ' + money(c.due) + '</span>' : '') + '</div>';
+  html += ownPeople.length ? '<div class="card">' + ownPeople.map(function (p) { return personCard(p, false); }).join('') + '</div>' : '<p class="empty">Nobody has paid from their own pocket.</p>';
   html += '</section>';
 
-  var catCount = Object.keys(c.cats).length;
-  html += '<section class="sec" aria-labelledby="h-cats"><div class="sec-head"><h2 id="h-cats">Where the money went</h2></div>' + categoryList(c, 5)
-    + (catCount > 5 ? '<button type="button" class="more" data-act="tab" data-tab="expenses">See all ' + catCount + ' categories →</button>' : '') + '</section>';
+  html += '<section class="sec" aria-labelledby="h-cats"><div class="sec-head"><h2 id="h-cats">Spent on what</h2></div>' + categoryList(c) + '</section>';
 
-  var recent = data.expenses.slice().sort(byDateDesc('spent_on')).slice(0, 6);
-  html += '<section class="sec" aria-labelledby="h-recent"><div class="sec-head"><h2 id="h-recent">Latest spending</h2></div>';
-  if (recent.length) {
-    html += '<ul class="rows card">' + recent.map(function (e) { return expenseRow(e, h(dayLabel(e.spent_on)) + ' · ' + h(e.category || 'Other')); }).join('') + '</ul>';
-    if (n > recent.length) html += '<button type="button" class="more" data-act="tab" data-tab="expenses">See all ' + n + ' expenses →</button>';
-  } else html += '<p class="empty">No expenses yet.' + (isAdmin ? ' Tap <b>+ Add</b> to record the first one.' : '') + '</p>';
-  html += '</section>';
+  var days = timeline();
+  var lastDay = days.filter(function (d) { return d.k; }).pop();
+  if (lastDay) {
+    html += '<section class="sec" aria-labelledby="h-last"><div class="sec-head"><h2 id="h-last">Latest day</h2></div>' + dayCard(lastDay)
+      + '<button type="button" class="more" data-act="tab" data-tab="days">See the full story, day by day →</button></section>';
+  }
   return html;
 }
 
-function expensesView(c) {
-  var html = '<section class="sec" aria-labelledby="h-all"><div class="sec-head"><h2 id="h-all">All expenses</h2><span class="label">' + plural(data.expenses.length, 'expense', 'expenses') + ' · ' + money(c.total) + '</span></div>';
-  if (data.expenses.length) {
-    var catOpts = uniq(Object.keys(c.cats).sort(function (a, b) { return c.cats[b] - c.cats[a]; }));
-    html += '<div class="filters"><input id="f-q" type="search" placeholder="Search expenses" aria-label="Search expenses" value="' + h(filters.q) + '">'
-      + '<select id="f-cat" aria-label="Filter by category"><option value="">All categories</option>' + catOpts.map(function (x) { return '<option value="' + h(x) + '"' + (x === filters.cat ? ' selected' : '') + '>' + h(x) + '</option>'; }).join('') + '</select>'
-      + '<select id="f-src" aria-label="Filter by how it was paid"><option value="">Paid any way</option>'
-      + [['cash', 'Cash in hand'], ['person', 'Someone’s own money'], ['family', 'Family money']].map(function (o) { return '<option value="' + o[0] + '"' + (filters.src === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
-      + '</select></div>';
-  }
-  html += '<div id="entry-list"></div></section>';
-  html += '<section class="sec" aria-labelledby="h-cats2"><div class="sec-head"><h2 id="h-cats2">By category</h2></div>' + categoryList(c) + '</section>';
-  return html;
+function daysView(c) {
+  var days = timeline();
+  var html = '<section class="sec" aria-labelledby="h-days"><div class="sec-head"><h2 id="h-days">Day by day</h2><span class="label">' + plural(days.length, 'day', 'days') + '</span></div>'
+    + '<p class="note">Every day in order: money received, money spent, and the cash left at the end of the day. That cash carries over to the next day.</p>';
+  html += days.length ? '<div class="timeline">' + days.map(dayCard).join('') + '</div>' : '<p class="empty">Nothing recorded yet.</p>';
+  if (days.length) html += '<div class="card lines"><div class="line total"><span>Cash left now</span><span>' + money(c.cash) + '</span></div><div class="line"><span>Total spent on treatment</span><span>' + money(c.total) + '</span></div></div>';
+  return html + '</section>';
 }
 
 function moneyView(c) {
-  var html = '<section class="sec" aria-labelledby="h-cash"><div class="sec-head"><h2 id="h-cash">Cash in hand</h2></div><div class="card lines">'
-    + '<div class="line"><span>Money received</span><span>' + money(c.cashIn) + '</span></div>'
-    + '<div class="line"><span>Spent from cash</span><span>' + money(-c.cashOut) + '</span></div>'
-    + (c.paidBackCash ? '<div class="line"><span>Paid back from cash</span><span>' + money(-c.paidBackCash) + '</span></div>' : '')
-    + '<div class="line total"><span>Cash in hand now</span><span>' + money(c.cash) + '</span></div>'
-    + (c.toReceive ? '<div class="line"><span>Still to receive</span><span>' + money(c.toReceive) + '</span></div>' : '')
-    + '</div></section>';
-
+  var html = '<section class="sec" aria-labelledby="h-people"><div class="sec-head"><h2 id="h-people">Everyone who helped</h2></div>';
   var everyone = c.people.filter(function (p) { return p.owed > 0 || p.gave > 0 || p.pending > 0 || p.returned > 0; });
-  html += '<section class="sec" aria-labelledby="h-people"><div class="sec-head"><h2 id="h-people">Everyone who helped</h2></div>';
   html += everyone.length ? '<div class="card">' + everyone.map(function (p) { return personCard(p, true); }).join('') + '</div>' : '<p class="empty">Nobody has paid or given money yet.</p>';
   html += '</section>';
 
-  html += '<section class="sec" aria-labelledby="h-in"><div class="sec-head"><h2 id="h-in">Money received</h2><span class="label">' + money(c.cashIn) + '</span></div>';
+  html += '<section class="sec" aria-labelledby="h-in"><div class="sec-head"><h2 id="h-in">Treatment money received</h2><span class="label">' + money(c.cashIn) + '</span></div>';
   if (data.moneyIn.length) {
     html += '<ul class="rows card">' + data.moneyIn.slice().sort(byDateDesc('received_on')).map(function (m) {
-      var tag = isAdmin ? 'button' : 'div';
       var tags = (m.received ? '' : '<span class="tag">still to receive</span>') + (m.returnable ? '<span class="tag">to return</span>' : '');
-      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-in" data-id="' + h(m.id) + '"><span class="r-main"><span class="r-title">From ' + h(m.from_name) + tags + '</span>'
-        + '<span class="r-meta">' + h(dayLabel(m.received_on)) + (m.note ? ' · ' + h(m.note) : '') + '</span></span><span class="r-amt in">+' + money(m.amount) + '</span></' + tag + '></li>';
+      return rowWrap('edit-in', m.id, '<span class="r-main"><span class="r-title">From ' + h(m.from_name) + tags + '</span><span class="r-meta">' + h(dayLabel(m.received_on)) + (m.note ? ' · ' + h(m.note) : '') + '</span></span><span class="r-amt in">+' + money(m.amount) + '</span>');
     }).join('') + '</ul>';
   } else html += '<p class="empty">No money received yet.</p>';
   html += '</section>';
@@ -237,13 +251,10 @@ function moneyView(c) {
   html += '<section class="sec" aria-labelledby="h-rep"><div class="sec-head"><h2 id="h-rep">Money paid back</h2><span class="label">' + money(c.returned) + '</span></div>';
   if (data.paybacks.length) {
     html += '<ul class="rows card">' + data.paybacks.slice().sort(byDateDesc('paid_on')).map(function (b) {
-      var tag = isAdmin ? 'button' : 'div';
-      return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="edit-payback" data-id="' + h(b.id) + '"><span class="r-main"><span class="r-title">Returned to ' + h(b.to_name) + '</span>'
-        + '<span class="r-meta">' + h(dayLabel(b.paid_on)) + (b.note ? ' · ' + h(b.note) : '') + '</span></span><span class="r-amt">' + money(b.amount) + '</span></' + tag + '></li>';
+      return rowWrap('edit-payback', b.id, '<span class="r-main"><span class="r-title">Paid back to ' + h(b.to_name) + '</span><span class="r-meta">' + h(dayLabel(b.paid_on)) + (b.note ? ' · ' + h(b.note) : '') + '</span></span><span class="r-amt">' + money(b.amount) + '</span>');
     }).join('') + '</ul>';
   } else html += '<p class="empty">Nothing paid back yet.</p>';
-  html += '</section>';
-  return html;
+  return html + '</section>';
 }
 
 function footer() {
@@ -255,62 +266,34 @@ function footer() {
     + '</div></footer>';
 }
 
+var settledNames = {};
 function render() {
   if (!loaded) return;
   var c = compute();
+  settledNames = {}; c.people.forEach(function (p) { if (p.owed > 0 && p.left <= 0.5) settledNames[key(p.name)] = 1; });
   document.title = data.title;
-  var html = header() + (tab === 'expenses' ? expensesView(c) : tab === 'money' ? moneyView(c) : overview(c)) + footer();
-  var focused = document.activeElement && document.activeElement.id === 'f-q';
-  app.innerHTML = html;
-  if (focused) { var q = document.getElementById('f-q'); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
-  renderEntries();
+  app.innerHTML = header() + (tab === 'days' ? daysView(c) : tab === 'money' ? moneyView(c) : overview(c)) + footer();
   renderChrome();
 }
-
-function matches(e) {
-  if (filters.cat && (e.category || 'Other') !== filters.cat) return false;
-  if (filters.src && e.source !== filters.src) return false;
-  if (filters.q) { var q = key(filters.q); if ((key(e.description) + ' ' + key(e.category) + ' ' + key(e.paid_by)).indexOf(q) < 0) return false; }
-  return true;
-}
-function renderEntries() {
-  var box = document.getElementById('entry-list'); if (!box) return;
-  if (!data.expenses.length) { box.innerHTML = '<p class="empty">No expenses recorded yet.</p>'; return; }
-  var list = data.expenses.filter(matches).sort(byDateDesc('spent_on'));
-  var shownTotal = list.reduce(function (s, e) { return s + num(e.amount); }, 0);
-  var out = '';
-  if (filters.q || filters.cat || filters.src) out += '<p class="result-line">Showing ' + list.length + ' of ' + data.expenses.length + ' · ' + money(shownTotal) + ' · <button type="button" class="link-btn" data-act="clear-filters">Clear filters</button></p>';
-  if (!list.length) { box.innerHTML = out + '<p class="empty">No expenses match this search.</p>'; return; }
-  var groups = [], idx = {};
-  list.forEach(function (e) {
-    var k = e.spent_on || 'none';
-    if (!(k in idx)) { idx[k] = groups.length; groups.push({ k: k, items: [], sum: 0 }); }
-    var g = groups[idx[k]]; g.items.push(e); g.sum += num(e.amount);
-  });
-  out += '<div class="card">' + groups.map(function (g) {
-    return '<div class="day"><span>' + h(dayLabel(g.k === 'none' ? '' : g.k)) + '</span><span class="num">' + money(g.sum) + '</span></div><ul class="rows">'
-      + g.items.map(function (e) { return expenseRow(e, h(e.category || 'Other') + ' · ' + sourceText(e)); }).join('') + '</ul>';
-  }).join('') + '</div>';
-  box.innerHTML = out;
-}
+function renderEntries() {}
 
 /* ---------- tab bar + add button ---------- */
 var ICONS = {
   overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
-  expenses: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg>',
+  days: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
   money: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16" cy="14.5" r="1.2"/></svg>'
 };
 var nav = document.createElement('nav'); nav.className = 'tabbar'; nav.setAttribute('aria-label', 'Sections'); document.body.appendChild(nav);
 var fab = document.createElement('button'); fab.type = 'button'; fab.className = 'fab'; fab.setAttribute('data-act', 'add-menu'); fab.textContent = '+ Add'; fab.hidden = true; document.body.appendChild(fab);
 function renderChrome() {
-  nav.innerHTML = '<div class="tabbar-in">' + [['overview', 'Overview'], ['expenses', 'Expenses'], ['money', 'Money']].map(function (t) {
+  nav.innerHTML = '<div class="tabbar-in">' + [['overview', 'Summary'], ['days', 'Day by day'], ['money', 'People']].map(function (t) {
     return '<button type="button" class="tab" data-act="tab" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : '') + '>' + ICONS[t[0]] + '<span>' + t[1] + '</span></button>';
   }).join('') + '</div>';
   fab.hidden = !isAdmin;
 }
 function setTab(t) {
   if (TABS.indexOf(t) < 0) t = 'overview';
-  if (location.hash.slice(1) !== t) { location.hash = t; return; } // hashchange renders
+  if (location.hash.slice(1) !== t) { location.hash = t; return; }
   tab = t; render(); window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', function () {
@@ -319,7 +302,7 @@ window.addEventListener('hashchange', function () {
 function openAddMenu() {
   openSheet('<div class="form"><h2 id="sheet-title">What do you want to add?</h2><div class="choices">'
     + '<button type="button" class="choice" data-act="add-expense"><b>Expense</b><span>Money spent on treatment</span></button>'
-    + '<button type="button" class="choice" data-act="add-in"><b>Money received</b><span>Cash someone gave for the treatment</span></button>'
+    + '<button type="button" class="choice" data-act="add-in"><b>Money received</b><span>Treatment money someone gave</span></button>'
     + '<button type="button" class="choice" data-act="payback"><b>Payback</b><span>Money returned to someone</span></button>'
     + '</div><div class="actions"><span class="spacer"></span><button type="button" class="secondary" data-act="close">Cancel</button></div></div>');
 }
@@ -512,7 +495,7 @@ document.addEventListener('click', function (ev) {
   if (act === 'logout') { sb.auth.signOut().then(function () { toast('Signed out'); }); return; }
   if (act === 'install' && deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(function () { deferredInstall = null; render(); }); return; }
   if (act === 'clear-filters') { filters = { q: '', cat: '', src: '' }; render(); return; }
-  if (act === 'filter-cat') { filters = { q: '', cat: t.getAttribute('data-cat') || '', src: '' }; setTab('expenses'); if (tab === 'expenses') render(); return; }
+  if (act === 'filter-cat') return;
   if (!isAdmin) return;
   if (act === 'add-menu') openAddMenu();
   else if (act === 'add-expense') openExpense(null);
