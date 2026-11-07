@@ -137,128 +137,85 @@ function load() {
 }
 
 /* ---------- pieces ---------- */
-function rowWrap(act, id, inner) {
+var settledNames = {};
+function rowWrap(act, id, inner, cls) {
   var tag = isAdmin ? 'button' : 'div';
-  return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row" data-act="' + act + '" data-id="' + h(id) + '">' + inner + '</' + tag + '></li>';
+  return '<li><' + tag + (isAdmin ? ' type="button"' : '') + ' class="row' + (cls ? ' ' + cls : '') + '" data-act="' + act + '" data-id="' + h(id) + '">' + inner + '</' + tag + '></li>';
 }
 function storyRow(e) {
   var x = e.x;
   if (e.kind === 'in') {
-    return rowWrap('edit-in', x.id, '<span class="r-main"><span class="r-title">Received from ' + h(x.from_name) + '</span>' + (x.note ? '<span class="r-meta">' + h(x.note) + '</span>' : '') + '</span><span class="r-amt in">+' + money(x.amount) + '</span>');
+    return rowWrap('edit-in', x.id, '<span class="r-main"><span class="r-title">Sent by ' + h(x.from_name) + '</span>' + (x.note ? '<span class="r-meta">' + h(x.note) + '</span>' : '') + '</span><span class="r-amt in">+ ' + money(x.amount) + '</span>', 'r-in');
   }
   if (e.kind === 'back') {
-    return rowWrap('edit-payback', x.id, '<span class="r-main"><span class="r-title">Paid back to ' + h(x.to_name) + '</span><span class="r-meta">' + h(x.note || (x.from_cash ? 'From the cash' : 'Not from the cash')) + '</span></span><span class="r-amt">−' + money(x.amount) + '</span>');
+    return rowWrap('edit-payback', x.id, '<span class="r-main"><span class="r-title">Given back to ' + h(x.to_name) + '</span>' + (x.note ? '<span class="r-meta">' + h(x.note) + '</span>' : '') + '</span><span class="r-amt">' + money(x.amount) + '</span>');
   }
   if (x.source === 'cash') {
-    return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span><span class="r-meta">' + h(x.category || 'Other') + '</span></span><span class="r-amt">−' + money(x.amount) + '</span>');
+    return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span></span><span class="r-amt">' + money(x.amount) + '</span>');
   }
   var who = x.paid_by ? h(x.paid_by) : 'family';
-  return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span><span class="r-meta">Paid by ' + who + ' from own pocket, not from the cash'
-    + (x.pay_back ? (settledNames[key(x.paid_by)] ? '<span class="tag ok">paid back ✓</span>' : '<span class="tag">to pay back</span>') : '') + '</span></span><span class="r-amt own">' + money(x.amount) + '</span>');
+  var note = 'Paid by ' + who + ' himself';
+  if (x.pay_back) note += settledNames[key(x.paid_by)] ? ' · money given back' : ' · to give back';
+  return rowWrap('edit-expense', x.id, '<span class="r-main"><span class="r-title">' + h(x.description) + '</span><span class="r-meta">' + note + '</span></span><span class="r-amt muted">' + money(x.amount) + '</span>', 'r-own');
+}
+function daySpent(day) {
+  return day.items.reduce(function (s, e) {
+    if (e.kind === 'back' && e.x.from_cash) return s + num(e.x.amount);
+    if (e.kind === 'out' && e.x.source === 'cash') return s + num(e.x.amount);
+    return s;
+  }, 0);
 }
 function dayCard(day) {
-  var out = '<article class="daycard card"><header class="dc-head"><h3>' + h(longDay(day.k)) + '</h3>' + (day.spent ? '<span class="dc-spent">Spent ' + money(day.spent) + '</span>' : '') + '</header>'
-    + '<div class="dc-line start"><span>Cash at start of day</span><span>' + money(day.start) + '</span></div>'
-    + '<ul class="rows">' + day.items.map(storyRow).join('') + '</ul>'
-    + '<div class="dc-line end"><span>Cash left at end of day</span><span>' + money(day.end) + '</span></div></article>';
-  return out;
-}
-function categoryList(c) {
-  var cats = Object.keys(c.cats).map(function (k) { return [k, c.cats[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
-  if (!cats.length) return '<p class="empty">Spending by category appears here once expenses are added.</p>';
-  var max = cats[0][1] || 1;
-  return '<ul class="cats card">' + cats.map(function (x) {
-    var share = c.total > 0 ? Math.round(x[1] / c.total * 100) : 0;
-    return '<li><div class="cat"><span class="cat-top"><span>' + h(x[0]) + '</span><span class="num">' + money(x[1]) + '<em>' + share + '%</em></span></span><span class="bar"><span style="width:' + Math.max(1, x[1] / max * 100).toFixed(1) + '%"></span></span></div></li>';
-  }).join('') + '</ul>';
-}
-function personCard(p, full) {
-  var out = '<div class="owe"><span class="owe-name">' + h(p.name) + '</span>';
-  if (p.left > 0.5) out += '<span class="owe-amt">We owe ' + money(p.left) + '</span>';
-  else if (p.owed > 0) out += '<span class="owe-amt ok">Paid back ✓</span>';
-  else if (p.pending > 0) out += '<span class="owe-amt">To give ' + money(p.pending) + '</span>';
-  else out += '<span class="owe-amt ok">' + money(p.gave) + '</span>';
-  var bits = [];
-  if (p.owed > 0) bits.push('Paid ' + money(p.owed) + ' from own pocket · returned ' + money(p.returned));
-  if (full && p.gave > 0) bits.push('Gave ' + money(p.gave) + ' treatment money');
-  if (full && p.pending > 0 && p.owed > 0) bits.push('Still to give ' + money(p.pending));
-  if (bits.length) out += '<span class="owe-detail">' + bits.join('<br>') + '</span>';
-  if (isAdmin && p.left > 0.5) out += '<button type="button" class="link-btn" data-act="payback" data-name="' + h(p.name) + '">Record payback</button>';
-  return out + '</div>';
+  var spent = daySpent(day);
+  return '<article class="day card"><header class="day-head"><h3>' + h(longDay(day.k)) + '</h3>' + (spent ? '<span class="day-total">' + money(spent) + ' spent</span>' : '') + '</header>'
+    + '<ul class="rows">' + day.items.map(storyRow).join('') + '</ul></article>';
 }
 
-/* ---------- views ---------- */
+/* ---------- page ---------- */
 function header() {
-  return '<header class="top"><div class="top-main"><h1>' + h(data.title) + '</h1><p class="sub">' + (data.updated ? 'Updated ' + h(fmtStamp(data.updated)) : 'Nothing recorded yet') + '</p></div>'
+  return '<header class="top"><div class="top-main"><h1>' + h(data.title) + '</h1><p class="sub">' + (data.updated ? 'Last updated ' + h(fmtStamp(data.updated)) : 'Nothing recorded yet') + '</p></div>'
     + '<div class="top-side">' + (isAdmin ? '<span class="badge">Admin</span>' : '') + '<button type="button" class="ghost" data-act="copy">Share</button></div></header>'
     + (offline ? '<p class="banner">You are offline. These are the last figures this phone saw.</p>' : '');
 }
 
-function overview(c) {
-  var range = c.first ? fmtDay(c.first) + (c.last && c.last !== c.first ? ' – ' + fmtDay(c.last) : '') : '';
-  var html = '<section class="hero" aria-label="Total spent"><span class="hero-label">Total spent on treatment</span><span class="hero-num">' + money(c.total) + '</span>'
-    + '<span class="hero-meta">' + (range ? range + ' · ' : '') + plural(data.expenses.length, 'expense', 'expenses') + '</span>'
-    + '<div class="hero-row"><div><span>Cash left now</span><b>' + money(c.cash) + '</b></div><div><span>Spent today</span><b>' + money(c.todaySpent) + '</b></div></div></section>';
+function page(c) {
+  var sent = c.cashIn, left = c.cash, spent = sent - left;
+  var pct = sent > 0 ? Math.min(100, Math.max(0, spent / sent * 100)) : 0;
 
-  html += '<section class="sec" aria-labelledby="h-sum"><div class="sec-head"><h2 id="h-sum">Where the money came from and went</h2></div><div class="card lines">'
-    + '<div class="line"><span>Treatment money received</span><span class="in">+' + money(c.cashIn) + '</span></div>'
-    + '<div class="line"><span>Spent from this money</span><span>−' + money(c.cashOut) + '</span></div>'
-    + (c.paidBackCash ? '<div class="line"><span>Paid back to people from it</span><span>−' + money(c.paidBackCash) + '</span></div>' : '')
-    + '<div class="line total"><span>Cash left now</span><span>' + money(c.cash) + '</span></div></div>'
-    + (c.ownPocket ? '<p class="note">Another ' + money(c.ownPocket) + ' was paid by people from their own pocket. That is included in the total spent, and shown below.</p>' : '')
+  var html = '<section class="sum card" aria-label="Money summary">'
+    + '<div class="sum-row"><span class="sum-label">Money sent</span><span class="sum-num in">' + money(sent) + '</span></div>'
+    + '<div class="sum-row"><span class="sum-label">Money spent</span><span class="sum-num out">− ' + money(spent) + '</span></div>'
+    + '<div class="sum-row left"><span class="sum-label">Money left</span><span class="sum-num">' + money(left) + '</span></div>'
+    + '<div class="usebar" role="img" aria-label="' + Math.round(pct) + '% of the money has been spent"><span style="width:' + pct.toFixed(1) + '%"></span></div>'
+    + '<p class="sum-note">' + Math.round(pct) + '% of the money sent has been spent' + (c.todaySpent ? ' · ' + money(c.todaySpent) + ' spent today' : '') + '</p>'
     + '</section>';
 
-  var ownPeople = c.people.filter(function (p) { return p.owed > 0; });
-  html += '<section class="sec" aria-labelledby="h-owe"><div class="sec-head"><h2 id="h-owe">Paid from own pocket</h2>' + (c.due ? '<span class="label due">Still to pay back ' + money(c.due) + '</span>' : '') + '</div>';
-  html += ownPeople.length ? '<div class="card">' + ownPeople.map(function (p) { return personCard(p, false); }).join('') + '</div>' : '<p class="empty">Nobody has paid from their own pocket.</p>';
-  html += '</section>';
-
-  html += '<section class="sec" aria-labelledby="h-cats"><div class="sec-head"><h2 id="h-cats">Spent on what</h2></div>' + categoryList(c) + '</section>';
-
-  var days = timeline();
-  var lastDay = days.filter(function (d) { return d.k; }).pop();
-  if (lastDay) {
-    html += '<section class="sec" aria-labelledby="h-last"><div class="sec-head"><h2 id="h-last">Latest day</h2></div>' + dayCard(lastDay)
-      + '<button type="button" class="more" data-act="tab" data-tab="days">See the full story, day by day →</button></section>';
+  if (c.owing.length) {
+    html += '<section class="sec" aria-labelledby="h-owe"><h2 id="h-owe">Still to give back</h2><div class="card">'
+      + c.owing.map(function (p) {
+        return '<div class="who"><span class="who-name">' + h(p.name) + '</span><span class="who-amt due">' + money(p.left) + '</span>'
+          + '<span class="who-note">' + h(p.name) + ' paid this from his own pocket</span>'
+          + (isAdmin ? '<button type="button" class="link-btn" data-act="payback" data-name="' + h(p.name) + '">Record that it was given back</button>' : '') + '</div>';
+      }).join('') + '</div></section>';
   }
-  return html;
-}
 
-function daysView(c) {
-  var days = timeline();
-  var html = '<section class="sec" aria-labelledby="h-days"><div class="sec-head"><h2 id="h-days">Day by day</h2><span class="label">' + plural(days.length, 'day', 'days') + '</span></div>'
-    + '<p class="note">Every day in order: money received, money spent, and the cash left at the end of the day. That cash carries over to the next day.</p>';
-  html += days.length ? '<div class="timeline">' + days.map(dayCard).join('') + '</div>' : '<p class="empty">Nothing recorded yet.</p>';
-  if (days.length) html += '<div class="card lines"><div class="line total"><span>Cash left now</span><span>' + money(c.cash) + '</span></div><div class="line"><span>Total spent on treatment</span><span>' + money(c.total) + '</span></div></div>';
-  return html + '</section>';
-}
+  var senders = {}; var order = [];
+  data.moneyIn.forEach(function (m) { if (!m.received) return; var k = key(m.from_name); if (!senders[k]) { senders[k] = { name: m.from_name, sum: 0, n: 0 }; order.push(k); } senders[k].sum += num(m.amount); senders[k].n++; });
+  order.sort(function (a, b) { return senders[b].sum - senders[a].sum; });
+  if (order.length) {
+    html += '<section class="sec" aria-labelledby="h-sent"><h2 id="h-sent">Who sent the money</h2><div class="card">'
+      + order.map(function (k) { var s = senders[k]; return '<div class="who"><span class="who-name">' + h(s.name) + '</span><span class="who-amt in">' + money(s.sum) + '</span><span class="who-note">' + plural(s.n, 'time', 'times') + '</span></div>'; }).join('')
+      + '<div class="who total"><span class="who-name">Total sent</span><span class="who-amt">' + money(sent) + '</span></div></div></section>';
+  }
 
-function moneyView(c) {
-  var html = '<section class="sec" aria-labelledby="h-people"><div class="sec-head"><h2 id="h-people">Everyone who helped</h2></div>';
-  var everyone = c.people.filter(function (p) { return p.owed > 0 || p.gave > 0 || p.pending > 0 || p.returned > 0; });
-  html += everyone.length ? '<div class="card">' + everyone.map(function (p) { return personCard(p, true); }).join('') + '</div>' : '<p class="empty">Nobody has paid or given money yet.</p>';
-  html += '</section>';
-
-  html += '<section class="sec" aria-labelledby="h-in"><div class="sec-head"><h2 id="h-in">Treatment money received</h2><span class="label">' + money(c.cashIn) + '</span></div>';
-  if (data.moneyIn.length) {
-    html += '<ul class="rows card">' + data.moneyIn.slice().sort(byDateDesc('received_on')).map(function (m) {
-      var tags = (m.received ? '' : '<span class="tag">still to receive</span>') + (m.returnable ? '<span class="tag">to return</span>' : '');
-      return rowWrap('edit-in', m.id, '<span class="r-main"><span class="r-title">From ' + h(m.from_name) + tags + '</span><span class="r-meta">' + h(dayLabel(m.received_on)) + (m.note ? ' · ' + h(m.note) : '') + '</span></span><span class="r-amt in">+' + money(m.amount) + '</span>');
-    }).join('') + '</ul>';
-  } else html += '<p class="empty">No money received yet.</p>';
-  html += '</section>';
-
-  html += '<section class="sec" aria-labelledby="h-rep"><div class="sec-head"><h2 id="h-rep">Money paid back</h2><span class="label">' + money(c.returned) + '</span></div>';
-  if (data.paybacks.length) {
-    html += '<ul class="rows card">' + data.paybacks.slice().sort(byDateDesc('paid_on')).map(function (b) {
-      return rowWrap('edit-payback', b.id, '<span class="r-main"><span class="r-title">Paid back to ' + h(b.to_name) + '</span><span class="r-meta">' + h(dayLabel(b.paid_on)) + (b.note ? ' · ' + h(b.note) : '') + '</span></span><span class="r-amt">' + money(b.amount) + '</span>');
-    }).join('') + '</ul>';
-  } else html += '<p class="empty">Nothing paid back yet.</p>';
+  var days = timeline().slice().reverse();
+  html += '<section class="sec" aria-labelledby="h-days"><h2 id="h-days">Day by day</h2>';
+  html += days.length ? '<div class="days">' + days.map(dayCard).join('') + '</div>' : '<p class="empty">Nothing recorded yet.' + (isAdmin ? ' Tap <b>+ Add</b> to add the first entry.' : '') + '</p>';
   return html + '</section>';
 }
 
 function footer() {
-  return '<footer class="foot"><p>To keep this on your phone, open the link in Chrome or Safari and choose <b>Add to Home Screen</b>.</p>'
+  return '<footer class="foot"><p>Tip: open this link on your phone and choose <b>Add to Home Screen</b> to keep it like an app.</p>'
     + '<div class="foot-actions">' + (deferredInstall ? '<button type="button" class="link-btn" data-act="install">Install app</button>' : '')
     + '<button type="button" class="link-btn" data-act="reload">Refresh</button>'
     + (isAdmin ? '<button type="button" class="link-btn" data-act="settings">Rename</button><button type="button" class="link-btn" data-act="logout">Sign out</button>'
@@ -266,44 +223,23 @@ function footer() {
     + '</div></footer>';
 }
 
-var settledNames = {};
 function render() {
   if (!loaded) return;
   var c = compute();
   settledNames = {}; c.people.forEach(function (p) { if (p.owed > 0 && p.left <= 0.5) settledNames[key(p.name)] = 1; });
   document.title = data.title;
-  app.innerHTML = header() + (tab === 'days' ? daysView(c) : tab === 'money' ? moneyView(c) : overview(c)) + footer();
-  renderChrome();
-}
-function renderEntries() {}
-
-/* ---------- tab bar + add button ---------- */
-var ICONS = {
-  overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
-  days: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
-  money: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16" cy="14.5" r="1.2"/></svg>'
-};
-var nav = document.createElement('nav'); nav.className = 'tabbar'; nav.setAttribute('aria-label', 'Sections'); document.body.appendChild(nav);
-var fab = document.createElement('button'); fab.type = 'button'; fab.className = 'fab'; fab.setAttribute('data-act', 'add-menu'); fab.textContent = '+ Add'; fab.hidden = true; document.body.appendChild(fab);
-function renderChrome() {
-  nav.innerHTML = '<div class="tabbar-in">' + [['overview', 'Summary'], ['days', 'Day by day'], ['money', 'People']].map(function (t) {
-    return '<button type="button" class="tab" data-act="tab" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : '') + '>' + ICONS[t[0]] + '<span>' + t[1] + '</span></button>';
-  }).join('') + '</div>';
+  app.innerHTML = header() + page(c) + footer();
   fab.hidden = !isAdmin;
 }
-function setTab(t) {
-  if (TABS.indexOf(t) < 0) t = 'overview';
-  if (location.hash.slice(1) !== t) { location.hash = t; return; }
-  tab = t; render(); window.scrollTo(0, 0);
-}
-window.addEventListener('hashchange', function () {
-  var t = location.hash.slice(1); tab = TABS.indexOf(t) >= 0 ? t : 'overview'; render(); window.scrollTo(0, 0);
-});
+function renderEntries() {}
+function setTab() { render(); window.scrollTo(0, 0); }
+
+var fab = document.createElement('button'); fab.type = 'button'; fab.className = 'fab'; fab.setAttribute('data-act', 'add-menu'); fab.textContent = '+ Add'; fab.hidden = true; document.body.appendChild(fab);
 function openAddMenu() {
   openSheet('<div class="form"><h2 id="sheet-title">What do you want to add?</h2><div class="choices">'
-    + '<button type="button" class="choice" data-act="add-expense"><b>Expense</b><span>Money spent on treatment</span></button>'
-    + '<button type="button" class="choice" data-act="add-in"><b>Money received</b><span>Treatment money someone gave</span></button>'
-    + '<button type="button" class="choice" data-act="payback"><b>Payback</b><span>Money returned to someone</span></button>'
+    + '<button type="button" class="choice" data-act="add-expense"><b>Money spent</b><span>Something paid for the treatment</span></button>'
+    + '<button type="button" class="choice" data-act="add-in"><b>Money sent</b><span>Someone sent treatment money</span></button>'
+    + '<button type="button" class="choice" data-act="payback"><b>Money given back</b><span>Returned to someone who paid himself</span></button>'
     + '</div><div class="actions"><span class="spacer"></span><button type="button" class="secondary" data-act="close">Cancel</button></div></div>');
 }
 
@@ -345,7 +281,7 @@ function openExpense(id) {
     + field('x-date', 'Date', input('x-date', v.spent_on || '', 'type="date"')) + '</div>'
     + field('x-cat', 'Category', input('x-cat', v.category, 'list="dl-cats" placeholder="Choose or type a new one"'))
     + '<fieldset><legend class="legend">Paid from</legend><div class="seg">'
-    + [['cash', 'Cash in hand'], ['person', 'Someone’s own money'], ['family', 'Family money']].map(function (o) { return '<label><input type="radio" name="x-src" value="' + o[0] + '"' + (src === o[0] ? ' checked' : '') + '>' + o[1] + '</label>'; }).join('')
+    + [['cash', 'Treatment money'], ['person', 'Someone paid himself'], ['family', 'Other family money']].map(function (o) { return '<label><input type="radio" name="x-src" value="' + o[0] + '"' + (src === o[0] ? ' checked' : '') + '>' + o[1] + '</label>'; }).join('')
     + '</div></fieldset>'
     + '<div id="x-person"' + (src === 'person' ? '' : ' hidden') + ' class="form">'
     + field('x-who', 'Who paid?', input('x-who', v.paid_by || '', 'list="dl-people" placeholder="Name"'))
@@ -397,7 +333,7 @@ function openPayback(id, name) {
     + '<div class="row2">' + field('p-amt', 'Amount (Rs)', input('p-amt', v.amount, 'type="number" inputmode="decimal" min="0" step="any" placeholder="0"'))
     + field('p-date', 'Date', input('p-date', v.paid_on || '', 'type="date"')) + '</div>'
     + field('p-note', 'Note (optional)', input('p-note', v.note || '', 'placeholder="e.g. Bank transfer"'))
-    + '<label class="check" for="p-cash"><input type="checkbox" id="p-cash"' + (v.from_cash ? ' checked' : '') + '><span>Paid from cash in hand</span></label>'
+    + '<label class="check" for="p-cash"><input type="checkbox" id="p-cash"' + (v.from_cash ? ' checked' : '') + '><span>Paid from the treatment money</span></label>'
     + actions(!!b, 'del-payback', id, b ? 'Save changes' : 'Record payback') + datalists() + '</form>', v.to_name ? 'p-amt' : 'p-to');
   paybackHint();
 }
@@ -453,15 +389,9 @@ function niceError(err) {
 
 /* ---------- copy summary ---------- */
 function summaryText() {
-  var c = compute();
-  var lines = [data.title, 'Total spent: ' + money(c.total), 'Cash in hand: ' + money(c.cash), ''];
-  var owe = c.people.filter(function (p) { return p.left > 0.5; });
-  if (owe.length) { lines.push('We need to pay back:'); owe.forEach(function (p) { lines.push('- ' + p.name + ': ' + money(p.left)); }); }
-  else lines.push('Nobody needs to be paid back right now.');
-  var pend = c.people.filter(function (p) { return p.pending > 0; });
-  if (pend.length) { lines.push('', 'Still to receive:'); pend.forEach(function (p) { lines.push('- ' + p.name + ': ' + money(p.pending)); }); }
-  var cats = Object.keys(c.cats).sort(function (a, b) { return c.cats[b] - c.cats[a]; });
-  if (cats.length) { lines.push('', 'By category:'); cats.forEach(function (k) { lines.push('- ' + k + ': ' + money(c.cats[k])); }); }
+  var c = compute(); var spent = c.cashIn - c.cash;
+  var lines = [data.title, '', 'Money sent: ' + money(c.cashIn), 'Money spent: ' + money(spent), 'Money left: ' + money(c.cash)];
+  if (c.owing.length) { lines.push('', 'Still to give back:'); c.owing.forEach(function (p) { lines.push('- ' + p.name + ': ' + money(p.left)); }); }
   lines.push('', location.href.split('#')[0]);
   return lines.join('\n');
 }
