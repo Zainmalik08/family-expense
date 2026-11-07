@@ -1,7 +1,7 @@
 {
-  "name": "Treatment Expenses",
+  "name": "Mother's Treatment Expenses",
   "short_name": "Expenses",
-  "description": "Family ledger of treatment expenses: total spent, cash in hand and who needs to be paid back.",
+  "description": "How much money was sent, spent and is left for Mama's treatment, day by day.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,8 +9,25 @@
   "background_color": "#F2F5F3",
   "theme_color": "#1D6B58",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
-  ]
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "id": "./",
+  "lang": "en"
 }

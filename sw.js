@@ -1,6 +1,6 @@
 // Keeps the app shell available offline. Figures always come fresh from the
 // database when online; the app itself shows the last figures it saw when offline.
-var CACHE = 'ledger-shell-v3';
+var CACHE = 'ledger-shell-v8';
 var SHELL = ['./', './index.html', './styles.css', './app.js', './config.js', './vendor/supabase.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

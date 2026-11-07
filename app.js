@@ -171,6 +171,30 @@ function dayCard(day) {
     + '<ul class="rows">' + day.items.map(storyRow).join('') + '</ul></article>';
 }
 
+
+/* ---------- install as app ---------- */
+function isStandalone() { try { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; } catch (e) { return false; } }
+function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+function installDismissed() { try { return !!localStorage.getItem('install-dismissed'); } catch (e) { return false; } }
+function installCard() {
+  if (isStandalone() || installDismissed()) return '';
+  return '<section class="install" aria-label="Install the app"><span class="install-text">Add this app to your phone</span>'
+    + '<button type="button" class="primary small" data-act="install-help">Install</button><button type="button" class="x" data-act="install-dismiss" aria-label="Hide">✕</button></section>';
+}
+function installHelp() {
+  if (deferredInstall) {
+    deferredInstall.prompt();
+    deferredInstall.userChoice.finally(function () { deferredInstall = null; render(); });
+    return;
+  }
+  var steps = isIOS()
+    ? '<ol class="steps"><li>Open this page in <b>Safari</b>.</li><li>Tap the <b>Share</b> button (square with an arrow) at the bottom.</li><li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>'
+    : '<ol class="steps"><li>Open this page in <b>Chrome</b>.</li><li>Tap the <b>⋮</b> menu at the top right.</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>, then <b>Install</b>.</li></ol>';
+  openSheet('<div class="form"><h2 id="sheet-title">Install on your phone</h2>' + steps
+    + '<p class="hint">The app icon appears on your home screen and always shows the latest figures.</p>'
+    + '<div class="actions"><span class="spacer"></span><button type="button" class="primary" data-act="close">OK</button></div></div>');
+}
+
 /* ---------- page ---------- */
 function header() {
   return '<header class="top"><div class="top-main"><h1>' + h(data.title) + '</h1><p class="sub">' + (data.updated ? 'Last updated ' + h(fmtStamp(data.updated)) : 'Nothing recorded yet') + '</p></div>'
@@ -182,12 +206,12 @@ function page(c) {
   var sent = c.cashIn, left = c.cash, spent = sent - left;
   var pct = sent > 0 ? Math.min(100, Math.max(0, spent / sent * 100)) : 0;
 
-  var html = '<section class="sum card" aria-label="Money summary">'
-    + '<div class="sum-row"><span class="sum-label">Money sent</span><span class="sum-num in">' + money(sent) + '</span></div>'
-    + '<div class="sum-row"><span class="sum-label">Money spent</span><span class="sum-num out">− ' + money(spent) + '</span></div>'
-    + '<div class="sum-row left"><span class="sum-label">Money left</span><span class="sum-num">' + money(left) + '</span></div>'
+  var html = '<section class="hero" aria-label="Money left"><span class="hero-label">Money left</span><span class="hero-num">' + money(left) + '</span>'
     + '<div class="usebar" role="img" aria-label="' + Math.round(pct) + '% of the money has been spent"><span style="width:' + pct.toFixed(1) + '%"></span></div>'
-    + '<p class="sum-note">' + Math.round(pct) + '% of the money sent has been spent' + (c.todaySpent ? ' · ' + money(c.todaySpent) + ' spent today' : '') + '</p>'
+    + '<span class="hero-note">' + Math.round(pct) + '% of the money has been spent' + (c.todaySpent ? ' · ' + money(c.todaySpent) + ' today' : '') + '</span></section>'
+    + '<section class="pair" aria-label="Money sent and spent">'
+    + '<div class="tile"><span class="tile-label">Money sent</span><span class="tile-num in">' + money(sent) + '</span></div>'
+    + '<div class="tile"><span class="tile-label">Money spent</span><span class="tile-num out">' + money(spent) + '</span></div>'
     + '</section>';
 
   if (c.owing.length) {
@@ -215,8 +239,8 @@ function page(c) {
 }
 
 function footer() {
-  return '<footer class="foot"><p>Tip: open this link on your phone and choose <b>Add to Home Screen</b> to keep it like an app.</p>'
-    + '<div class="foot-actions">' + (deferredInstall ? '<button type="button" class="link-btn" data-act="install">Install app</button>' : '')
+  return '<footer class="foot">'
+    + '<div class="foot-actions">' + (!isStandalone() ? '<button type="button" class="link-btn" data-act="install-help">Install app</button>' : '')
     + '<button type="button" class="link-btn" data-act="reload">Refresh</button>'
     + (isAdmin ? '<button type="button" class="link-btn" data-act="settings">Rename</button><button type="button" class="link-btn" data-act="logout">Sign out</button>'
                : (session ? '<button type="button" class="link-btn" data-act="logout">Sign out</button>' : '<button type="button" class="link-btn" data-act="login">Admin sign in</button>'))
@@ -228,7 +252,7 @@ function render() {
   var c = compute();
   settledNames = {}; c.people.forEach(function (p) { if (p.owed > 0 && p.left <= 0.5) settledNames[key(p.name)] = 1; });
   document.title = data.title;
-  app.innerHTML = header() + page(c) + footer();
+  app.innerHTML = header() + installCard() + page(c) + footer();
   fab.hidden = !isAdmin;
 }
 function renderEntries() {}
@@ -421,6 +445,8 @@ document.addEventListener('click', function (ev) {
   if (act === 'tab') return setTab(t.getAttribute('data-tab'));
   if (act === 'reload') return load();
   if (act === 'copy') return copySummary();
+  if (act === 'install-help') return installHelp();
+  if (act === 'install-dismiss') { try { localStorage.setItem('install-dismissed', '1'); } catch (e) {} render(); return; }
   if (act === 'login') return openLogin();
   if (act === 'logout') { sb.auth.signOut().then(function () { toast('Signed out'); }); return; }
   if (act === 'install' && deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(function () { deferredInstall = null; render(); }); return; }
@@ -480,6 +506,7 @@ document.addEventListener('submit', function (ev) {
 document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !sheet.hidden) closeSheet(); });
 document.addEventListener('visibilitychange', function () { if (sb && document.visibilityState === 'visible' && Date.now() - lastLoad > 30000) load(); });
 window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredInstall = e; render(); });
+window.addEventListener('appinstalled', function () { deferredInstall = null; toast('Installed. Find it on your home screen.'); render(); });
 
 /* ---------- start ---------- */
 var configured = /^https:\/\//.test(cfg.supabaseUrl || '') && cfg.supabaseKey && String(cfg.supabaseKey).indexOf('PASTE') < 0;
