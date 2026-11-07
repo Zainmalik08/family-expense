@@ -208,7 +208,7 @@ function page(c) {
       + '<div class="who total"><span class="who-name">Total sent</span><span class="who-amt">' + money(sent) + '</span></div></div></section>';
   }
 
-  var days = timeline().slice().reverse();
+  var days = timeline();
   html += '<section class="sec" aria-labelledby="h-days"><h2 id="h-days">Day by day</h2>';
   html += days.length ? '<div class="days">' + days.map(dayCard).join('') + '</div>' : '<p class="empty">Nothing recorded yet.' + (isAdmin ? ' Tap <b>+ Add</b> to add the first entry.' : '') + '</p>';
   return html + '</section>';
